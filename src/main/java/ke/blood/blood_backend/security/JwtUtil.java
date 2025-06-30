@@ -16,7 +16,6 @@ public class JwtUtil {
     private final long expirationMs = 1000L * 60 * 60; // 1 hour
 
     public JwtUtil(@Value("${jwt.secret}") String jwtSecret) {
-        // Create HMAC-SHA key from the provided secret
         this.key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
     }
 

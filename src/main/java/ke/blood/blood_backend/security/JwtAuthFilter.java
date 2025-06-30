@@ -30,16 +30,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         String uri = request.getRequestURI();
         String context = request.getContextPath(); // often ""
-        // DEBUG log: uncomment if needed
-        // System.out.println("JwtAuthFilter: URI=" + uri + ", context=" + context);
-
-        // 1) Skip JWT auth for any /auth/** endpoints
+        // Skip JWT auth for /auth/**
         if (uri.startsWith(context + "/auth")) {
             chain.doFilter(request, response);
             return;
         }
 
-        // 2) Extract Authorization header
         final String authHeader = request.getHeader("Authorization");
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
@@ -55,7 +51,6 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 });
             }
         }
-        // Continue filter chain
         chain.doFilter(request, response);
     }
 }

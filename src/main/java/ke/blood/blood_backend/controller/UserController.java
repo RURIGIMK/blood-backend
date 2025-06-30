@@ -20,14 +20,12 @@ public class UserController {
 
     private final UserRepository repo;
 
-    // Admin-only: list all users
     @GetMapping
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public List<User> getAll() {
         return repo.findAll();
     }
 
-    // Get own profile
     @GetMapping("/me")
     public ResponseEntity<?> getMe(Principal principal) {
         String username = principal.getName();
@@ -36,7 +34,6 @@ public class UserController {
                 .orElse(ResponseEntity.status(404).body(Map.of("error", "User not found")));
     }
 
-    // Get any user by ID
     @GetMapping("/{id}")
     public ResponseEntity<?> getOne(@PathVariable Long id) {
         return repo.findById(id)
@@ -44,7 +41,6 @@ public class UserController {
                 .orElse(ResponseEntity.status(404).body(Map.of("error", "User not found")));
     }
 
-    // Update: only self or admin
     @PutMapping("/{id}")
     public ResponseEntity<?> update(@PathVariable Long id,
                                     @RequestBody User req,
@@ -61,12 +57,14 @@ public class UserController {
             u.setEmail(req.getEmail());
             u.setBloodType(req.getBloodType());
             u.setAvailable(req.getAvailable());
+            u.setLatitude(req.getLatitude());
+            u.setLongitude(req.getLongitude());
+            u.setLocationDescription(req.getLocationDescription());
             repo.save(u);
             return ResponseEntity.ok(u);
         }).orElse(ResponseEntity.status(404).body(Map.of("error", "User not found")));
     }
 
-    // Delete: admin only
     @DeleteMapping("/{id}")
     @PreAuthorize("hasAuthority('ROLE_ADMIN')")
     public ResponseEntity<?> delete(@PathVariable Long id) {

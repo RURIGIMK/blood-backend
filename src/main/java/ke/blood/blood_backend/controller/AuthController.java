@@ -1,9 +1,11 @@
 package ke.blood.blood_backend.controller;
 
+import io.swagger.v3.oas.annotations.Operation;
 import ke.blood.blood_backend.model.Role;
 import ke.blood.blood_backend.model.User;
 import ke.blood.blood_backend.repository.UserRepository;
 import ke.blood.blood_backend.security.JwtUtil;
+import ke.blood.blood_backend.service.AuditService;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.Setter;
@@ -22,15 +24,15 @@ public class AuthController {
     private final UserRepository repo;
     private final PasswordEncoder encoder;
     private final JwtUtil jwtUtil;
+    private final AuditService auditService;
 
+    @Operation(summary = "Register a new user (donor, recipient, hospital, or admin)")
     @PostMapping("/register")
     public ResponseEntity<?> register(@RequestBody RegisterRequest req) {
-        // 1. Username uniqueness
         if (repo.existsByUsername(req.getUsername())) {
             return ResponseEntity.badRequest().body(Map.of("error", "Username already exists"));
         }
 
-        // 2. Validate & convert role input
         String inputRole = req.getRole().trim().toUpperCase();
         Role role;
         try {
@@ -45,22 +47,29 @@ public class AuthController {
             );
         }
 
-        // 3. Build User entity
         User user = User.builder()
                 .username(req.getUsername())
                 .password(encoder.encode(req.getPassword()))
                 .fullName(req.getFullName())
                 .email(req.getEmail())
                 .bloodType(req.getBloodType())
-                .available(false)
+                .available(Boolean.TRUE.equals(req.getAvailable()))
+                .latitude(req.getLatitude())
+                .longitude(req.getLongitude())
+                .locationDescription(req.getLocationDescription())
                 .roles(Set.of(role))
                 .build();
 
-        // 4. Save
-        repo.save(user);
+        User saved = repo.save(user);
+
+        auditService.logEvent("USER_REGISTER",
+                "New user registered: " + saved.getUsername() + " with role " + role.name(),
+                saved);
+
         return ResponseEntity.ok(Map.of("message", "User registered"));
     }
 
+    @Operation(summary = "Login user and obtain JWT token")
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody LoginRequest req) {
         var userOpt = repo.findByUsername(req.getUsername());
@@ -72,6 +81,9 @@ public class AuthController {
             return ResponseEntity.status(401).body(Map.of("error", "Invalid credentials"));
         }
         String token = jwtUtil.generateToken(user.getUsername());
+
+        auditService.logEvent("USER_LOGIN", "User logged in: " + user.getUsername(), user);
+
         return ResponseEntity.ok(Map.of("token", token));
     }
 
@@ -82,7 +94,11 @@ public class AuthController {
         private String fullName;
         private String email;
         private String bloodType;
-        private String role; // e.g. "donor", "recipient", "hospital", "admin", or "ROLE_DONOR", etc.
+        private String role;
+        private Boolean available;
+        private Double latitude;
+        private Double longitude;
+        private String locationDescription;
     }
 
     @Getter @Setter

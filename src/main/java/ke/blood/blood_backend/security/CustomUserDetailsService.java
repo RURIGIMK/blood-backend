@@ -3,7 +3,6 @@ package ke.blood.blood_backend.security;
 import ke.blood.blood_backend.model.User;
 import ke.blood.blood_backend.repository.UserRepository;
 import lombok.RequiredArgsConstructor;
-import org.springframework.security.core.*;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.*;
 import org.springframework.stereotype.Service;
