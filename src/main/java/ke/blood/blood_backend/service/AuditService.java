@@ -11,7 +11,6 @@ import java.util.List;
 @Service
 @RequiredArgsConstructor
 public class AuditService {
-
     private final AuditLogRepository auditLogRepository;
 
     public void logEvent(String eventType, String description, User user) {

@@ -3,95 +3,144 @@ package ke.blood.blood_backend.controller;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import ke.blood.blood_backend.model.*;
-import ke.blood.blood_backend.repository.BloodRequestRepository;
-import ke.blood.blood_backend.repository.DonationRecordRepository;
-import ke.blood.blood_backend.repository.InventoryRepository;
-import ke.blood.blood_backend.repository.MatchRecordRepository;
-import ke.blood.blood_backend.repository.UserRepository;
+import ke.blood.blood_backend.repository.*;
 import ke.blood.blood_backend.service.AuditService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;                // <— added
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.security.Principal;
 import java.util.Map;
-import java.util.Optional;
 
 @RestController
 @RequestMapping("/donations")
 @RequiredArgsConstructor
-@SecurityRequirement(name = "BearerAuth")
+@SecurityRequirement(name="BearerAuth")
 public class DonationController {
-
-    private final UserRepository userRepository;
-    private final BloodRequestRepository requestRepository;
-    private final MatchRecordRepository matchRecordRepository;
-    private final DonationRecordRepository donationRecordRepository;
-    private final InventoryRepository inventoryRepository;
+    private final UserRepository userRepo;
+    private final BloodRequestRepository requestRepo;
+    private final MatchRecordRepository matchRepo;
+    private final DonationRecordRepository donationRepo;
+    private final InventoryRepository inventoryRepo;
     private final AuditService auditService;
 
-    @Operation(summary = "Donor confirms donation for a matched request")
+    @Operation(summary="Donor views donation history")
+    @GetMapping("/history")
+    @PreAuthorize("hasAuthority('ROLE_DONOR')")
+    public ResponseEntity<?> history(Principal p) {
+        User donor = userRepo.findByUsername(p.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+        return ResponseEntity.ok(donationRepo.findByDonor(donor));
+    }
+
+    @Operation(summary="Donor claims a matched request")
+    @PostMapping("/claim/{requestId}")
+    @PreAuthorize("hasAuthority('ROLE_DONOR')")
+    public ResponseEntity<MatchRecord> claim(@PathVariable Long requestId, Principal p) {
+        User donor = userRepo.findByUsername(p.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
+
+        MatchRecord mr = matchRepo.findByBloodRequest_IdAndDonor_Id(requestId, donor.getId())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN, "No matching record"));
+
+        if (mr.getStatus() != MatchStatus.NOTIFIED) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request not in a claimable state");
+        }
+
+        mr.setStatus(MatchStatus.CLAIMED);
+        matchRepo.save(mr);
+
+        auditService.logEvent("REQUEST_CLAIMED",
+                "Donor " + donor.getUsername() + " claimed request " + requestId,
+                donor);
+
+        return ResponseEntity.ok(mr);
+    }
+
+    @Operation(summary="Donor confirms actual donation")
     @PostMapping("/confirm/{requestId}")
     @PreAuthorize("hasAuthority('ROLE_DONOR')")
-    public ResponseEntity<?> confirmDonation(@PathVariable Long requestId, Principal principal) {
-        String username = principal.getName();
-        Optional<User> donorOpt = userRepository.findByUsername(username);
-        if (donorOpt.isEmpty()) {
-            return ResponseEntity.status(404).body(Map.of("error", "User not found"));
-        }
-        User donor = donorOpt.get();
+    public ResponseEntity<DonationRecord> confirm(@PathVariable Long requestId, Principal p) {
+        User donor = userRepo.findByUsername(p.getName())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "User not found"));
 
-        Optional<BloodRequest> reqOpt = requestRepository.findById(requestId);
-        if (reqOpt.isEmpty()) {
-            return ResponseEntity.status(404).body(Map.of("error", "Request not found"));
-        }
-        BloodRequest request = reqOpt.get();
+        BloodRequest request = requestRepo.findById(requestId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Request not found"));
 
         if (request.getMatchedDonor() == null || !request.getMatchedDonor().getId().equals(donor.getId())) {
-            return ResponseEntity.status(403).body(Map.of("error", "You are not the matched donor for this request"));
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "You are not the matched donor");
         }
         if (request.getStatus() != RequestStatus.MATCHED) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Request is not in MATCHED status"));
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Request is not in MATCHED status");
         }
 
+        // Create donation record
         DonationRecord record = DonationRecord.builder()
                 .donor(donor)
                 .bloodType(request.getBloodType())
                 .quantity(request.getQuantity())
                 .build();
-        DonationRecord savedRecord = donationRecordRepository.save(record);
+        DonationRecord saved = donationRepo.save(record);
 
-        String bt = request.getBloodType();
-        inventoryRepository.findByBloodType(bt).ifPresentOrElse(inv -> {
+        // Update inventory
+        inventoryRepo.findByBloodType(request.getBloodType()).ifPresentOrElse(inv -> {
             inv.setQuantity(inv.getQuantity() + request.getQuantity());
-            inventoryRepository.save(inv);
+            inventoryRepo.save(inv);
         }, () -> {
-            Inventory newInv = Inventory.builder()
-                    .bloodType(bt)
+            Inventory inv = Inventory.builder()
+                    .bloodType(request.getBloodType())
                     .quantity(request.getQuantity())
                     .build();
-            inventoryRepository.save(newInv);
+            inventoryRepo.save(inv);
         });
 
+        // Mark request fulfilled
         request.setStatus(RequestStatus.FULFILLED);
-        requestRepository.save(request);
+        requestRepo.save(request);
 
-        matchRecordRepository.findByDonor(donor).stream()
-                .filter(mr -> mr.getBloodRequest().getId().equals(requestId))
-                .findFirst()
+        // Update match record status
+        matchRepo.findByBloodRequest_IdAndDonor_Id(requestId, donor.getId())
                 .ifPresent(mr -> {
                     mr.setStatus(MatchStatus.CONFIRMED);
-                    matchRecordRepository.save(mr);
+                    matchRepo.save(mr);
                 });
 
+        // Set donor unavailable
         donor.setAvailable(false);
-        userRepository.save(donor);
+        userRepo.save(donor);
 
         auditService.logEvent("DONATION_CONFIRMED",
-                "Donor " + donor.getUsername() + " confirmed donation for request ID " + requestId,
+                "Donor " + donor.getUsername() + " confirmed donation for request " + requestId,
                 donor);
 
-        return ResponseEntity.ok(savedRecord);
+        return ResponseEntity.ok(saved);
+    }
+
+    @Operation(summary="Hospital verifies donation (legacy endpoint)")
+    @PostMapping("/verify/{donationId}")
+    @PreAuthorize("hasAuthority('ROLE_HOSPITAL')")
+    public ResponseEntity<Map<String, String>> verifyLegacy(@PathVariable Long donationId) {
+        DonationRecord donation = donationRepo.findById(donationId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Donation not found"));
+
+        inventoryRepo.findByBloodType(donation.getBloodType()).ifPresentOrElse(inv -> {
+            inv.setQuantity(inv.getQuantity() + donation.getQuantity());
+            inventoryRepo.save(inv);
+        }, () -> {
+            Inventory inv = Inventory.builder()
+                    .bloodType(donation.getBloodType())
+                    .quantity(donation.getQuantity())
+                    .build();
+            inventoryRepo.save(inv);
+        });
+
+        auditService.logEvent("DONATION_VERIFIED",
+                "Legacy verify for donation " + donationId,
+                null);
+
+        return ResponseEntity.ok(Map.of("message", "Donation verified"));
     }
 }

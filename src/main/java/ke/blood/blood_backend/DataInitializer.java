@@ -13,7 +13,6 @@ import java.util.Set;
 @Component
 @RequiredArgsConstructor
 public class DataInitializer implements CommandLineRunner {
-
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
 
@@ -21,9 +20,7 @@ public class DataInitializer implements CommandLineRunner {
     public void run(String... args) throws Exception {
         String adminUsername = "admin";
         String adminPassword = "adminpass";
-        if (userRepository.existsByUsername(adminUsername)) {
-            System.out.println("Admin user already exists.");
-        } else {
+        if (!userRepository.existsByUsername(adminUsername)) {
             User admin = User.builder()
                     .username(adminUsername)
                     .password(passwordEncoder.encode(adminPassword))
@@ -31,9 +28,6 @@ public class DataInitializer implements CommandLineRunner {
                     .email("admin@example.com")
                     .bloodType("")
                     .available(false)
-                    .latitude(null)
-                    .longitude(null)
-                    .locationDescription("N/A")
                     .roles(Set.of(Role.ROLE_ADMIN))
                     .build();
             userRepository.save(admin);
