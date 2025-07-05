@@ -4,6 +4,7 @@ import ke.blood.blood_backend.model.BloodRequest;
 import ke.blood.blood_backend.model.MatchRecord;
 import ke.blood.blood_backend.model.MatchStatus;
 import ke.blood.blood_backend.model.RequestStatus;
+import ke.blood.blood_backend.model.Role;
 import ke.blood.blood_backend.model.User;
 import ke.blood.blood_backend.repository.BloodRequestRepository;
 import ke.blood.blood_backend.repository.MatchRecordRepository;
@@ -52,13 +53,14 @@ public class MatchingService {
         List<String> compatibleTypes = COMPATIBILITY
                 .getOrDefault(request.getBloodType(), List.of());
 
-        // Fetch, filter, then sort by createdAt (nulls filtered out)
+        // Fetch, filter, then sort by createdAt (nulls filtered out),
+        // and ensure only users with ROLE_DONOR are considered
         List<User> donors = userRepository.findAll().stream()
+                .filter(u -> u.getRoles().contains(Role.ROLE_DONOR))
                 .filter(u -> Boolean.TRUE.equals(u.getAvailable()))
                 .filter(u -> u.getBloodType() != null
                         && compatibleTypes.contains(u.getBloodType()))
                 .filter(u -> !u.getId().equals(request.getRequester().getId()))
-                // Exclude any user without a createdAt timestamp
                 .filter(u -> u.getCreatedAt() != null)
                 .sorted(Comparator.comparing(User::getCreatedAt))
                 .toList();
