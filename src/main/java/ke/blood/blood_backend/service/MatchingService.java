@@ -53,16 +53,19 @@ public class MatchingService {
         List<String> compatibleTypes = COMPATIBILITY
                 .getOrDefault(request.getBloodType(), List.of());
 
-        // Fetch, filter, then sort by createdAt (nulls filtered out),
-        // and ensure only users with ROLE_DONOR are considered
+        // Fetch and filter donors:
+        // 1) must be available (true)
+        // 2) must have ROLE_DONOR
+        // 3) must match blood type
+        // 4) must not be the requester
+        // 5) must have a non-null createdAt for sorting
         List<User> donors = userRepository.findAll().stream()
-                .filter(u -> u.getRoles().contains(Role.ROLE_DONOR))
-                .filter(u -> Boolean.TRUE.equals(u.getAvailable()))
-                .filter(u -> u.getBloodType() != null
-                        && compatibleTypes.contains(u.getBloodType()))
-                .filter(u -> !u.getId().equals(request.getRequester().getId()))
-                .filter(u -> u.getCreatedAt() != null)
-                .sorted(Comparator.comparing(User::getCreatedAt))
+                .filter(u -> Boolean.TRUE.equals(u.getAvailable()))                          // only truly available donors
+                .filter(u -> u.getRoles().contains(Role.ROLE_DONOR))                         // only users with donor role
+                .filter(u -> u.getBloodType() != null && compatibleTypes.contains(u.getBloodType()))
+                .filter(u -> !u.getId().equals(request.getRequester().getId()))              // no self-matching
+                .filter(u -> u.getCreatedAt() != null)                                       // ensure sortable
+                .sorted(Comparator.comparing(User::getCreatedAt))                            // earliest-registered first
                 .toList();
 
         if (donors.isEmpty()) {
