@@ -14,7 +14,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
@@ -29,7 +28,7 @@ public class MatchingService {
     private final AuditService auditService;
 
     /**
-     * ABO + Rh compatibility map.
+     * ABO + Rh compatibility chart.
      */
     private static final Map<String, List<String>> COMPATIBILITY = Map.of(
             "O-",  List.of("O-"),
@@ -44,30 +43,20 @@ public class MatchingService {
 
     @Transactional
     public void matchRequest(BloodRequest request) {
-        // Only match pending requests
         if (request.getStatus() != RequestStatus.PENDING) {
             return;
         }
 
-        // Determine compatible donor blood types
         List<String> compatibleTypes = COMPATIBILITY
                 .getOrDefault(request.getBloodType(), List.of());
 
-        // Fetch and filter donors:
-        List<User> donors = userRepository.findAll().stream()
-                // 1) must be explicitly available == true
-                .filter(u -> u.getAvailable() != null && u.getAvailable())
-                // 2) must have ROLE_DONOR
-                .filter(u -> u.getRoles().contains(Role.ROLE_DONOR))
-                // 3) must match blood type
-                .filter(u -> u.getBloodType() != null && compatibleTypes.contains(u.getBloodType()))
-                // 4) must not be the requester
-                .filter(u -> !u.getId().equals(request.getRequester().getId()))
-                // 5) must have a non-null createdAt for sorting
-                .filter(u -> u.getCreatedAt() != null)
-                // sort by registration date
-                .sorted(Comparator.comparing(User::getCreatedAt))
-                .toList();
+        // Fetch only truly available donors (available=true), with ROLE_DONOR, matching bloodType,
+        // not the requester, ordered by createdAt
+        List<User> donors = userRepository.findAvailableDonors(
+                Role.ROLE_DONOR,
+                compatibleTypes,
+                request.getRequester().getId()
+        );
 
         if (donors.isEmpty()) {
             auditService.logEvent(
@@ -78,16 +67,15 @@ public class MatchingService {
             return;
         }
 
-        // Pick the earliest-registered donor
         User chosenDonor = donors.get(0);
 
-        // Update the request
+        // Update request to MATCHED
         request.setMatchedDonor(chosenDonor);
         request.setStatus(RequestStatus.MATCHED);
         request.setMatchedAt(Instant.now());
         bloodRequestRepository.save(request);
 
-        // Create the match record
+        // Create match record
         MatchRecord record = MatchRecord.builder()
                 .bloodRequest(request)
                 .donor(chosenDonor)
@@ -96,19 +84,17 @@ public class MatchingService {
                 .build();
         record = matchRecordRepository.save(record);
 
-        // Attempt email notification (DB is already updated)
+        // Send email notification and mark donor unavailable
         try {
             emailService.sendMatchNotification(chosenDonor, request);
             record.setNotificationSent(true);
             record.setNotificationSentAt(Instant.now());
             matchRecordRepository.save(record);
 
-            // Now mark donor unavailable
             chosenDonor.setAvailable(false);
             userRepository.save(chosenDonor);
 
         } catch (Exception ex) {
-            // Log but do not roll back the DB changes
             auditService.logEvent(
                     "MATCH_EMAIL_FAILED",
                     "Failed to notify donor " + chosenDonor.getUsername(),
@@ -116,7 +102,7 @@ public class MatchingService {
             );
         }
 
-        // Final audit of success
+        // Final audit
         auditService.logEvent(
                 "MATCH_SUCCESS",
                 "Request ID " + request.getId() + " matched to donor " + chosenDonor.getUsername(),
