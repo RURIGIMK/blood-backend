@@ -10,9 +10,18 @@ import java.util.List;
 import java.util.Optional;
 
 public interface UserRepository extends JpaRepository<User, Long> {
+
     Optional<User> findByUsername(String username);
     boolean existsByUsername(String username);
 
+    /**
+     * Only return users who:
+     *  - are available = true
+     *  - have the DONOR role
+     *  - bloodType is in the provided list
+     *  - are not the requester
+     * Sorted by creation timestamp (earliest first).
+     */
     @Query("""
       SELECT u
       FROM User u

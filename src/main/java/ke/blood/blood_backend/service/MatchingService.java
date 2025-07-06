@@ -1,14 +1,7 @@
 package ke.blood.blood_backend.service;
 
-import ke.blood.blood_backend.model.BloodRequest;
-import ke.blood.blood_backend.model.MatchRecord;
-import ke.blood.blood_backend.model.MatchStatus;
-import ke.blood.blood_backend.model.RequestStatus;
-import ke.blood.blood_backend.model.Role;
-import ke.blood.blood_backend.model.User;
-import ke.blood.blood_backend.repository.BloodRequestRepository;
-import ke.blood.blood_backend.repository.MatchRecordRepository;
-import ke.blood.blood_backend.repository.UserRepository;
+import ke.blood.blood_backend.model.*;
+import ke.blood.blood_backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -43,21 +36,21 @@ public class MatchingService {
 
     @Transactional
     public void matchRequest(BloodRequest request) {
-        if (request.getStatus() != RequestStatus.PENDING) {
-            return;
-        }
+        // 1) Only try to match PENDING requests
+        if (request.getStatus() != RequestStatus.PENDING) return;
 
-        List<String> compatibleTypes = COMPATIBILITY
+        // 2) Determine compatible donor blood types
+        List<String> types = COMPATIBILITY
                 .getOrDefault(request.getBloodType(), List.of());
 
-        // Fetch only truly available donors (available=true), with ROLE_DONOR, matching bloodType,
-        // not the requester, ordered by createdAt
+        // 3) One single DB query: only available=true, ROLE_DONOR, correct types, not the requester
         List<User> donors = userRepository.findAvailableDonors(
                 Role.ROLE_DONOR,
-                compatibleTypes,
+                types,
                 request.getRequester().getId()
         );
 
+        // 4) If none, audit & exit
         if (donors.isEmpty()) {
             auditService.logEvent(
                     "MATCH_ATTEMPT_NO_DONORS",
@@ -67,45 +60,46 @@ public class MatchingService {
             return;
         }
 
-        User chosenDonor = donors.get(0);
+        // 5) Pick the earliest-registered donor
+        User donor = donors.get(0);
 
-        // Update request to MATCHED
-        request.setMatchedDonor(chosenDonor);
+        // 6) Update the request record
+        request.setMatchedDonor(donor);
         request.setStatus(RequestStatus.MATCHED);
         request.setMatchedAt(Instant.now());
         bloodRequestRepository.save(request);
 
-        // Create match record
+        // 7) Create and save the MatchRecord
         MatchRecord record = MatchRecord.builder()
                 .bloodRequest(request)
-                .donor(chosenDonor)
+                .donor(donor)
                 .status(MatchStatus.NOTIFIED)
                 .notificationSent(false)
                 .build();
         record = matchRecordRepository.save(record);
 
-        // Send email notification and mark donor unavailable
+        // 8) Send notification, mark donor unavailable
         try {
-            emailService.sendMatchNotification(chosenDonor, request);
+            emailService.sendMatchNotification(donor, request);
             record.setNotificationSent(true);
             record.setNotificationSentAt(Instant.now());
             matchRecordRepository.save(record);
 
-            chosenDonor.setAvailable(false);
-            userRepository.save(chosenDonor);
+            donor.setAvailable(false);
+            userRepository.save(donor);
 
-        } catch (Exception ex) {
+        } catch (Exception e) {
             auditService.logEvent(
                     "MATCH_EMAIL_FAILED",
-                    "Failed to notify donor " + chosenDonor.getUsername(),
+                    "Failed to notify donor " + donor.getUsername(),
                     request.getRequester()
             );
         }
 
-        // Final audit
+        // 9) Final audit
         auditService.logEvent(
                 "MATCH_SUCCESS",
-                "Request ID " + request.getId() + " matched to donor " + chosenDonor.getUsername(),
+                "Request ID " + request.getId() + " matched to donor " + donor.getUsername(),
                 request.getRequester()
         );
     }
