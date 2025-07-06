@@ -32,12 +32,12 @@ public class MatchingService {
      * ABO + Rh compatibility map.
      */
     private static final Map<String, List<String>> COMPATIBILITY = Map.of(
-            "O-", List.of("O-"),
-            "O+", List.of("O-", "O+"),
-            "A-", List.of("O-", "A-"),
-            "A+", List.of("O-", "O+", "A-", "A+"),
-            "B-", List.of("O-", "B-"),
-            "B+", List.of("O-", "O+", "B-", "B+"),
+            "O-",  List.of("O-"),
+            "O+",  List.of("O-", "O+"),
+            "A-",  List.of("O-", "A-"),
+            "A+",  List.of("O-", "O+", "A-", "A+"),
+            "B-",  List.of("O-", "B-"),
+            "B+",  List.of("O-", "O+", "B-", "B+"),
             "AB-", List.of("O-", "A-", "B-", "AB-"),
             "AB+", List.of("O-", "O+", "A-", "A+", "B-", "B+", "AB-", "AB+")
     );
@@ -54,18 +54,19 @@ public class MatchingService {
                 .getOrDefault(request.getBloodType(), List.of());
 
         // Fetch and filter donors:
-        // 1) must be available (true)
-        // 2) must have ROLE_DONOR
-        // 3) must match blood type
-        // 4) must not be the requester
-        // 5) must have a non-null createdAt for sorting
         List<User> donors = userRepository.findAll().stream()
-                .filter(u -> Boolean.TRUE.equals(u.getAvailable()))                          // only truly available donors
-                .filter(u -> u.getRoles().contains(Role.ROLE_DONOR))                         // only users with donor role
+                // 1) must be explicitly available == true
+                .filter(u -> u.getAvailable() != null && u.getAvailable())
+                // 2) must have ROLE_DONOR
+                .filter(u -> u.getRoles().contains(Role.ROLE_DONOR))
+                // 3) must match blood type
                 .filter(u -> u.getBloodType() != null && compatibleTypes.contains(u.getBloodType()))
-                .filter(u -> !u.getId().equals(request.getRequester().getId()))              // no self-matching
-                .filter(u -> u.getCreatedAt() != null)                                       // ensure sortable
-                .sorted(Comparator.comparing(User::getCreatedAt))                            // earliest-registered first
+                // 4) must not be the requester
+                .filter(u -> !u.getId().equals(request.getRequester().getId()))
+                // 5) must have a non-null createdAt for sorting
+                .filter(u -> u.getCreatedAt() != null)
+                // sort by registration date
+                .sorted(Comparator.comparing(User::getCreatedAt))
                 .toList();
 
         if (donors.isEmpty()) {
